@@ -1,0 +1,48 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Server Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Push Database Schema
+        run: npx prisma db push
+        env:
+          DATABASE_URL: "file:./ci.db"
+
+      - name: Run Backend Test Suite
+        run: npm test
+        env:
+          DATABASE_URL: "file:./ci.db"
+          JWT_SECRET: "test_jwt_secret_key"
+          ADMIN_SECRET: "test_admin_secret_key"
+          PORT: "5001"
+          NODE_ENV: "test"
+
+      - name: Install Client Dependencies
+        run: npm ci --prefix client
+
+      - name: Build Client Production Bundle
+        run: npm run build --prefix client

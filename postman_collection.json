@@ -1,0 +1,237 @@
+{
+  "info": {
+    "name": "Ticket Booking System API",
+    "description": "Complete Postman collection to test Admin, Organiser, Customer, Seat Holds, Bookings, QR Tickets, and Waitlist APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000/api" },
+    { "key": "adminToken", "value": "" },
+    { "key": "organiserToken", "value": "" },
+    { "key": "customerToken", "value": "" },
+    { "key": "venueId", "value": "" },
+    { "key": "eventId", "value": "" },
+    { "key": "showId", "value": "" },
+    { "key": "showSeatId", "value": "" },
+    { "key": "bookingId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Register Admin",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"System Admin\",\n  \"email\": \"admin@ticket.com\",\n  \"password\": \"Admin123!\",\n  \"role\": \"ADMIN\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Register Organiser",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Event Organiser\",\n  \"email\": \"organiser@ticket.com\",\n  \"password\": \"Organiser123!\",\n  \"role\": \"ORGANISER\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Register Customer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice Customer\",\n  \"email\": \"alice@gmail.com\",\n  \"password\": \"Customer123!\",\n  \"role\": \"CUSTOMER\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] }
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@gmail.com\",\n  \"password\": \"Customer123!\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Admin Venue Setup",
+      "item": [
+        {
+          "name": "Create Venue (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Grand Cinema Hall\",\n  \"address\": \"777 Broadway St\",\n  \"totalRows\": 3,\n  \"totalCols\": 4,\n  \"categoryRules\": {\n    \"A\": \"VIP\",\n    \"B\": \"PREMIUM\",\n    \"C\": \"STANDARD\"\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/admin/venues", "host": ["{{baseUrl}}"], "path": ["admin", "venues"] }
+          }
+        },
+        {
+          "name": "Get Venues",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/admin/venues", "host": ["{{baseUrl}}"], "path": ["admin", "venues"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Organiser Event & Show",
+      "item": [
+        {
+          "name": "Create Event (Organiser)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{organiserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Inception 4K Re-Release\",\n  \"description\": \"Mind-bending sci-fi thriller live screening\",\n  \"type\": \"MOVIE\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/organiser/events", "host": ["{{baseUrl}}"], "path": ["organiser", "events"] }
+          }
+        },
+        {
+          "name": "Create Show (Organiser)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{organiserToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"venueId\": \"{{venueId}}\",\n  \"startTime\": \"2026-09-01T18:00:00.000Z\",\n  \"endTime\": \"2026-09-01T21:00:00.000Z\",\n  \"categoryPrices\": {\n    \"VIP\": 50,\n    \"PREMIUM\": 30,\n    \"STANDARD\": 15\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/organiser/shows", "host": ["{{baseUrl}}"], "path": ["organiser", "shows"] }
+          }
+        },
+        {
+          "name": "Get Organiser Revenue Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{organiserToken}}" }],
+            "url": { "raw": "{{baseUrl}}/organiser/analytics/summary", "host": ["{{baseUrl}}"], "path": ["organiser", "analytics", "summary"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Customer Seat Selection & Booking",
+      "item": [
+        {
+          "name": "Browse Events",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/events", "host": ["{{baseUrl}}"], "path": ["events"] }
+          }
+        },
+        {
+          "name": "Get Visual Seat Map",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/shows/{{showId}}/seats", "host": ["{{baseUrl}}"], "path": ["shows", "{{showId}}", "seats"] }
+          }
+        },
+        {
+          "name": "Hold Seat (10 Min TTL)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{customerToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"showSeatIds\": [\"{{showSeatId}}\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/shows/{{showId}}/hold", "host": ["{{baseUrl}}"], "path": ["shows", "{{showId}}", "hold"] }
+          }
+        },
+        {
+          "name": "Confirm Booking & Generate QR Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{customerToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"showId\": \"{{showId}}\",\n  \"showSeatIds\": [\"{{showSeatId}}\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/bookings/confirm", "host": ["{{baseUrl}}"], "path": ["bookings", "confirm"] }
+          }
+        },
+        {
+          "name": "Get Customer Bookings",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{customerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/bookings/my", "host": ["{{baseUrl}}"], "path": ["bookings", "my"] }
+          }
+        },
+        {
+          "name": "Cancel Booking (Triggers Waitlist)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{customerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/bookings/{{bookingId}}/cancel", "host": ["{{baseUrl}}"], "path": ["bookings", "{{bookingId}}", "cancel"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Waitlist Operations",
+      "item": [
+        {
+          "name": "Join Waitlist",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{customerToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"showId\": \"{{showId}}\",\n  \"seatCategory\": \"VIP\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/waitlist/join", "host": ["{{baseUrl}}"], "path": ["waitlist", "join"] }
+          }
+        },
+        {
+          "name": "Get My Waitlists & Offers",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{customerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/waitlist/my", "host": ["{{baseUrl}}"], "path": ["waitlist", "my"] }
+          }
+        }
+      ]
+    }
+  ]
+}

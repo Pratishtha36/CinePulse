@@ -1,0 +1,176 @@
+// Prisma Schema for Ticket Booking System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String?
+  googleId     String?  @unique
+  avatarUrl    String?
+  role         String   // ADMIN, ORGANISER, CUSTOMER
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  events          Event[]          @relation("OrganiserEvents")
+  holds           SeatHold[]       @relation("CustomerHolds")
+  bookings        Booking[]        @relation("CustomerBookings")
+  waitlistEntries WaitlistEntry[]  @relation("CustomerWaitlists")
+
+  @@index([role])
+  @@index([googleId])
+}
+
+model Venue {
+  id        String   @id @default(uuid())
+  name      String
+  address   String
+  totalRows Int
+  totalCols Int
+  createdAt DateTime @default(now())
+
+  seats Seat[]
+  shows Show[]
+}
+
+model Seat {
+  id        String @id @default(uuid())
+  venueId   String
+  rowLabel  String
+  colNumber Int
+  category  String // VIP, PREMIUM, STANDARD
+
+  venue     Venue      @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  showSeats ShowSeat[]
+
+  @@unique([venueId, rowLabel, colNumber])
+  @@index([venueId, category])
+}
+
+model Event {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  type        String   // MOVIE, CONCERT
+  posterUrl   String?
+  organiserId String
+  createdAt   DateTime @default(now())
+
+  organiser User   @relation("OrganiserEvents", fields: [organiserId], references: [id])
+  shows     Show[]
+
+  @@index([type])
+  @@index([organiserId])
+}
+
+model Show {
+  id             String   @id @default(uuid())
+  eventId        String
+  venueId        String
+  startTime      DateTime
+  endTime        DateTime
+  categoryPrices String   // JSON string: {"VIP": 50, "PREMIUM": 30, "STANDARD": 15}
+  createdAt      DateTime @default(now())
+
+  event           Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  venue           Venue           @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  showSeats       ShowSeat[]
+  holds           SeatHold[]
+  bookings        Booking[]
+  waitlistEntries WaitlistEntry[]
+
+  @@index([eventId, startTime])
+  @@index([venueId, startTime])
+}
+
+model ShowSeat {
+  id      String @id @default(uuid())
+  showId  String
+  seatId  String
+  status  String @default("AVAILABLE") // AVAILABLE, HELD, BOOKED
+  version Int    @default(1)           // Optimistic concurrency control
+
+  show           Show            @relation(fields: [showId], references: [id], onDelete: Cascade)
+  seat           Seat            @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  hold           SeatHold?
+  bookings       Booking[]
+  waitlistOffers WaitlistOffer[]
+
+  @@unique([showId, seatId])
+  @@index([showId, status])
+}
+
+model SeatHold {
+  id         String   @id @default(uuid())
+  showSeatId String   @unique
+  showId     String
+  customerId String
+  expiresAt  DateTime
+  status     String   @default("ACTIVE") // ACTIVE, EXPIRED, CONVERTED
+  createdAt  DateTime @default(now())
+
+  showSeat ShowSeat @relation(fields: [showSeatId], references: [id], onDelete: Cascade)
+  show     Show     @relation(fields: [showId], references: [id], onDelete: Cascade)
+  customer User     @relation("CustomerHolds", fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, status])
+  @@index([customerId, status])
+  @@index([showId, status])
+}
+
+model Booking {
+  id               String   @id @default(uuid())
+  bookingReference String   @unique
+  showSeatId       String
+  showId           String
+  customerId       String
+  pricePaid        Float
+  status           String   @default("CONFIRMED") // CONFIRMED, CANCELLED
+  qrCodeData       String   // Encoded data URL
+  createdAt        DateTime @default(now())
+
+  showSeat ShowSeat @relation(fields: [showSeatId], references: [id], onDelete: Cascade)
+  show     Show     @relation(fields: [showId], references: [id], onDelete: Cascade)
+  customer User     @relation("CustomerBookings", fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@index([showId, status])
+}
+
+model WaitlistEntry {
+  id           String   @id @default(uuid())
+  showId       String
+  seatCategory String
+  customerId   String
+  status       String   @default("WAITING") // WAITING, OFFERED, EXPIRED, BOOKED, CANCELLED
+  createdAt    DateTime @default(now())
+
+  show     Show            @relation(fields: [showId], references: [id], onDelete: Cascade)
+  customer User            @relation("CustomerWaitlists", fields: [customerId], references: [id], onDelete: Cascade)
+  offers   WaitlistOffer[]
+
+  @@index([showId, seatCategory, status, createdAt])
+  @@index([customerId, status])
+}
+
+model WaitlistOffer {
+  id              String   @id @default(uuid())
+  waitlistEntryId String
+  showSeatId      String
+  offerExpiresAt  DateTime
+  status          String   @default("PENDING") // PENDING, CLAIMED, EXPIRED
+  createdAt       DateTime @default(now())
+
+  waitlistEntry WaitlistEntry @relation(fields: [waitlistEntryId], references: [id], onDelete: Cascade)
+  showSeat      ShowSeat      @relation(fields: [showSeatId], references: [id], onDelete: Cascade)
+
+  @@index([offerExpiresAt, status])
+}
