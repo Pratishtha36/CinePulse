@@ -1,131 +1,227 @@
-# 🎫 Ticket Booking System (Backend & Concurrency Engine)
+# CinePulse - High-Concurrency Ticket Booking & Event Operations Platform
 
-A high-concurrency ticket booking engine for movies and concerts built with Node.js, Express, TypeScript, Prisma ORM (SQLite / PostgreSQL), Socket.io, Nodemailer, and Jest.
-
----
-
-## 🌟 Key Features
-
-1. **Role-Based Access Control (RBAC)**:
-   - **ADMIN**: Create and manage venue layouts, seat grids (`totalRows` $\times$ `totalCols`), and seat category mappings (`VIP`, `PREMIUM`, `STANDARD`).
-   - **ORGANISER**: Create event listings (movies & concerts), create showtimes with venue bindings & per-category pricing, view revenue & occupancy analytics.
-   - **CUSTOMER**: Browse events, view interactive visual seat maps, hold seats, book tickets with instant QR code generation, receive email notifications, cancel bookings, and join waitlists.
-
-2. **Concurrency Protection (Flash Sale Safe)**:
-   - Atomic database transaction isolation with pessimistic row-locking (`SELECT ... FOR UPDATE`).
-   - Parallel hold requests for the exact same seat automatically resolve with **1 success** and **$N-1$ HTTP 409 Conflicts**.
-
-3. **Seat Hold & Auto-Release TTL Engine**:
-   - Holds seats with a configurable TTL (default: 10 minutes).
-   - Auto-release scheduler cleans up abandoned/expired holds every 15 seconds and broadcasts real-time WebSocket seat availability updates.
-
-4. **Automated Waitlist Queue & Time-Limited Offer Flow**:
-   - Customers join seat-category waitlists when shows sell out.
-   - When a booking is cancelled, the system automatically reserves the seat for the top waitlisted customer, generates a time-limited offer (10 min TTL), and emails them a claim link.
-   - If unclaimed before expiration, the offer auto-advances to the next customer in queue.
-
-5. **QR Code Tickets & Automated Email Delivery**:
-   - Confirmed bookings generate a high-res QR code encoding booking reference and ticket payload.
-   - Automated HTML ticket emails dispatched via Nodemailer with embedded QR code attachments.
+CinePulse is an enterprise-grade ticket booking and box office operations system engineered for high-concurrency environments, flash sales, and live admission management. Built with Node.js, Express, TypeScript, Prisma ORM, React, Tailwind CSS, Cloudflare R2 / AWS S3, Socket.io, and Nodemailer.
 
 ---
 
-## 🛠️ Setup Guide
+## Production-Grade Architecture & Engineering Highlights
+
+### 1. Concurrency Control and Race Condition Mitigation
+* **Pessimistic and Atomic Transactions**: Critical operations (seat holds, booking confirmations, waitlist claims) execute within isolated database transactions.
+* **Flash Sale Protection**: When dozens of concurrent requests attempt to reserve the exact same seat simultaneously, the transaction engine guarantees that exactly one request succeeds while all competing requests receive deterministic HTTP 409 Conflict responses without data corruption or overselling.
+* **Versioned Seat State**: Utilizes state versioning on seat records to prevent race conditions across distributed instances.
+
+### 2. Direct-to-Cloud Asset Pipeline (AWS S3 / Cloudflare R2 / CDN)
+* **Presigned Upload Architecture**: Media assets (event and movie posters) bypass the application server via short-lived, cryptographically signed PUT URLs, enabling direct browser-to-cloud uploads. This eliminates server memory buffering and CPU bottlenecks.
+* **Edge CDN Integration**: Static assets are served via high-speed Content Delivery Networks with immutable cache-control headers (`public, max-age=31536000, immutable`), minimizing origin load and latency.
+* **Fail-Safe Server Proxy Fallback**: If a client encounters restrictive corporate firewalls or missing bucket CORS headers, the system automatically falls back to an authenticated server-side upload stream without breaking the user experience.
+* **Strict Media Validation**: Enforces MIME-type verification, 5MB file size limits, and sanitizes filenames into cryptographically random UUIDs to prevent directory traversal and overwrite attacks.
+
+### 3. Time-To-Live (TTL) Seat Hold Engine
+* **Non-Blocking Temporary Holds**: When a customer selects seats, temporary reservations are acquired with a configurable TTL (default: 10 minutes).
+* **Automated TTL Scheduler**: A background worker audits and cleans expired holds every 15 seconds, immediately freeing stale inventory.
+* **Real-Time WebSocket Synchronization**: State changes (holds, releases, bookings) broadcast via Socket.io to all connected clients, ensuring instant map updates without manual page refreshes.
+
+### 4. Automated Waitlist Queue and Priority Reallocation
+* **Category-Based Waitlists**: When a showtime sells out, customers can join an ordered queue for specific seat tiers (VIP, Premium, Standard).
+* **Automated Event-Driven Offer Dispatch**: When an existing booking is cancelled or a hold expires, the concurrency engine identifies the next eligible waitlisted customer, places a dedicated hold, and dispatches a time-sensitive reservation offer via email.
+* **Auto-Advancement**: If an offered ticket is not claimed within the designated window, the system automatically marks the offer as expired and forwards the seat to the next waitlisted user.
+
+### 5. Admission Verification and QR Code Engine
+* **High-Density QR Tickets**: Each confirmed ticket generates a high-resolution QR payload containing signed booking references, show metadata, and customer details.
+* **Gate Validator Tool**: Organisers and venue staff can scan tickets directly at entrance gates using the verification scanner API, providing sub-second validation and preventing duplicate entry.
+
+### 6. Transactional Email System
+* **Dual Environment Support**: Built-in Ethereal test inbox generation for local testing with zero setup, seamlessly switching to authenticated SMTP (Gmail, Resend, SendGrid, Amazon SES) in production.
+* **Embedded Media Support**: Emails include embedded ticket QR codes (`cid` attachments) ensuring display across all standard mobile and desktop email clients.
+
+### 7. Defense-in-Depth Security and Anti-Abuse
+* **Role-Based Access Control (RBAC)**: Strict separation of privileges across Administrator, Organiser, and Customer personas enforced via JWT middleware and Zod schema validations.
+* **Tiered Rate Limiting**: Independent rate limiters protect authentication routes (brute-force defense), seat hold APIs (anti-scalping / anti-bot), and file upload endpoints.
+* **Security Headers**: Hardened with Helmet HTTP headers, strict Cross-Origin Resource Policies (CORP), and CORS protections.
+
+### 8. Reliability and Health Monitoring
+* **Liveness Probe** (`GET /api/health`): Monitors application process responsiveness.
+* **Readiness Probe** (`GET /api/ready`): Validates database connectivity via active connection pinging.
+
+---
+
+## Role-Based Portals
+
+* **Administrator Studio**: Design auditorium layouts, configure seat matrices (`totalRows` x `totalCols`), and define tier category rules (VIP, Premium, Standard).
+* **Organiser Hub**: Publish events, configure showtime slots with custom tier pricing, view live box office gross revenue analytics, and scan attendee tickets at the gate.
+* **Customer Interface**: Browse catalog, filter by production type, view real-time interactive seat maps, reserve seats, claim waitlist offers, and manage bookings.
+
+---
+
+## Architecture Diagram
+
+```
+[ Customer / Organiser / Admin Clients ]
+                   │
+                   ├─── HTTP REST APIs ───> [ Helmet / Rate Limiting Middleware ]
+                   ├─── Direct Cloud Upload ───> [ Cloudflare R2 / AWS S3 + CDN ]
+                   └─── WebSockets (Socket.io) <─── [ Real-time Event Broadcaster ]
+                                                           │
+                                             [ Express + TypeScript API ]
+                                                           │
+                      ┌────────────────────────────────────┼────────────────────────────────────┐
+                      ▼                                    ▼                                    ▼
+         [ Concurrency Engine ]                  [ TTL Hold Scheduler ]              [ Email Service ]
+         (Row Locks & Transactions)              (Background Worker)                 (Nodemailer / SMTP)
+                      │                                    │                                    │
+                      └────────────────────────────────────┴────────────────────────────────────┘
+                                                           │
+                                              [ Prisma ORM / Database ]
+```
+
+---
+
+## Tech Stack
+
+* **Backend**: Node.js, Express, TypeScript, Prisma ORM, Socket.io, Nodemailer, Zod, Helmet, Multer
+* **Cloud Storage**: AWS S3 SDK (`@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`), Cloudflare R2
+* **Frontend**: React, TypeScript, Vite, Tailwind CSS, Lucide Icons
+* **Testing**: Jest, Supertest, TS-Jest
+* **Database**: SQLite (Development) / PostgreSQL or MySQL (Production)
+
+---
+
+## Getting Started
 
 ### 1. Prerequisites
-- Node.js (v18+ recommended)
-- npm
+* Node.js (v18 or higher)
+* npm (v9 or higher)
 
-### 2. Installation & Configuration
-Clone the repository and install dependencies:
+### 2. Installation
+Clone the repository and install dependencies for backend and frontend:
+
 ```bash
+# Install backend dependencies
 npm install
+
+# Install frontend dependencies
+npm install --prefix client
 ```
 
-Copy `.env.example` to `.env`:
+### 3. Environment Configuration
+Create a `.env` file in the root directory:
+
 ```env
+PORT=5001
+NODE_ENV=development
+CLIENT_URL=http://localhost:5173
 DATABASE_URL="file:./dev.db"
-PORT=5000
-JWT_SECRET="ticket_booking_super_secret_jwt_key_2026"
-NODE_ENV="development"
+
+JWT_SECRET=your_jwt_secret_key_2026
+ADMIN_SECRET=your_admin_secret_key_2026
+GOOGLE_CLIENT_ID=
+
 SEAT_HOLD_TTL_MINUTES=10
 WAITLIST_OFFER_TTL_MINUTES=10
+MAX_SEATS_PER_HOLD=10
+
+# Cloud Object Storage (Cloudflare R2 or AWS S3)
+S3_BUCKET_NAME=
+S3_REGION=auto
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_ENDPOINT=
+CDN_URL=
+
+# SMTP Email Configuration (Optional for dev, uses Ethereal by default)
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM="CinePulse Tickets <tickets@cinepulse.com>"
 ```
 
-### 3. Database Migration & Setup
-Initialize the database and Prisma client:
+### 4. Database Setup and Seeding
+Initialize the database schema and seed default administrative personas and sample auditorium data:
+
 ```bash
 npx prisma db push
+npx tsx prisma/seed.ts
 ```
 
-### 4. Running the Backend Server
-Start the development server with live reload:
+Default credentials created by the seed script:
+* **Admin**: `admin@cinepulse.com` / `password123`
+* **Organiser**: `organiser@events.com` / `password123`
+* **Customer**: `alice@gmail.com` / `password123`
+
+### 5. Running the Application
+Run both backend API and frontend client concurrently:
+
 ```bash
-npm run dev
+npm run dev:all
 ```
-Server runs at `http://localhost:5001`.
 
+* Frontend: `http://localhost:5173`
+* Backend API: `http://localhost:5001`
 
-### 5. Running Automated Tests
-Run the comprehensive automated test suite (testing RBAC, venue setup, concurrency locks, hold TTL, QR generation, waitlist reallocation, and revenue analytics):
+---
+
+## Automated Test Suite
+
+The system includes a comprehensive integration and concurrency test suite covering RBAC, venue builders, atomic row-level concurrency locks, hold TTL expiration, QR validation, waitlist transitions, and cloud asset presigning.
+
+Run the test suite:
+
 ```bash
 npm test
 ```
 
 ---
 
-## 📖 API Documentation Summary
+## API Reference
 
-### 🔑 Authentication (`/api/auth`)
-- `POST /api/auth/register` - Register user (`ADMIN`, `ORGANISER`, `CUSTOMER`)
-- `POST /api/auth/login` - Authenticate & obtain JWT
-- `GET /api/auth/me` - Get logged-in user profile
+### Authentication (`/api/auth`)
+* `POST /api/auth/register` - Register a new user (`CUSTOMER`, `ORGANISER`, `ADMIN`)
+* `POST /api/auth/login` - User login and JWT issuance
+* `POST /api/auth/google` - Google OAuth 2.0 verification and login
+* `POST /api/auth/demo` - Instant persona session switcher for development
+* `GET /api/auth/me` - Authenticated user identity inspection
 
-### 🏛️ Admin (`/api/admin`) [Requires `ADMIN` role]
-- `POST /api/admin/venues` - Create venue & custom seat grid layout
-- `GET /api/admin/venues` - List all venues
-- `GET /api/admin/venues/:id` - Get venue details with seat layout
-- `PUT /api/admin/venues/:id` - Update venue name and address
-- `DELETE /api/admin/venues/:id` - Delete venue (if no active shows attached)
+### Administrator (`/api/admin`) [Requires `ADMIN`]
+* `POST /api/admin/venues` - Create auditorium and define seat category matrices
+* `GET /api/admin/venues` - List all configured venues
+* `GET /api/admin/venues/:id` - Retrieve venue structure and seating layouts
+* `PUT /api/admin/venues/:id` - Update venue metadata
+* `DELETE /api/admin/venues/:id` - Delete venue (if unattached to active shows)
 
-### 🎭 Organiser (`/api/organiser`) [Requires `ORGANISER` or `ADMIN` role]
-- `POST /api/organiser/events` - Create movie or concert event listing
-- `POST /api/organiser/shows` - Create show with venue binding, conflict checks & per-category pricing
-- `GET /api/organiser/analytics/summary` - View revenue & seat occupancy metrics per event
+### Organiser (`/api/organiser`) [Requires `ORGANISER` or `ADMIN`]
+* `POST /api/organiser/upload/presigned-url` - Generate short-lived direct cloud upload URL
+* `POST /api/organiser/upload/local` - Server-side upload proxy fallback
+* `POST /api/organiser/events` - Publish new movie or concert catalog entry
+* `POST /api/organiser/shows` - Schedule showtime slot with venue binding and tier pricing
+* `GET /api/organiser/analytics/summary` - Gross revenue and occupancy metrics ledger
 
-### 🎬 Customer Events & Seats (`/api`)
-- `GET /api/events` - Browse & filter events (supports `search`, `type`, `venueId`, `date`)
-- `GET /api/events/:id` - View single event details with all showtimes
-- `GET /api/shows/:showId/seats` - Get visual seat grid with live status (`AVAILABLE`, `HELD`, `BOOKED`), pricing, and sold-out stats
-- `POST /api/shows/:showId/hold` - Hold seat(s) with TTL (Concurrency locks & waitlist protections enforced)
-- `POST /api/shows/:showId/release` - Release seat hold manually
+### Public Catalog and Seating (`/api`)
+* `GET /api/events` - Search and filter event catalog (`search`, `type`, `venueId`, `date`)
+* `GET /api/events/:id` - Retrieve event details and upcoming show schedules
+* `GET /api/shows/:showId/seats` - Retrieve visual seat map with real-time availability states
+* `POST /api/shows/:showId/hold` - Acquire atomic seat hold with TTL
+* `POST /api/shows/:showId/release` - Release active seat hold
 
-### 🎟️ Bookings & Waitlist (`/api/bookings`, `/api/waitlist`)
-- `POST /api/bookings/confirm` - Confirm booking for held seats / waitlist offer (generates QR ticket & sends email)
-- `GET /api/bookings/my` - View customer booking history
-- `POST /api/bookings/:bookingId/cancel` - Cancel booking (triggers automated waitlist reallocation)
-- `POST /api/bookings/verify` - Verify ticket QR payload / booking reference (Event check-in)
-- `POST /api/waitlist/join` - Join category waitlist for sold-out show
-- `GET /api/waitlist/my` - View waitlist status and pending offers
-- `GET /api/waitlist/offers/:offerId` - View specific waitlist offer details and claim deadline
-- `DELETE /api/waitlist/:waitlistId` - Leave / cancel waitlist position
-- `POST /api/waitlist/offers/:offerId/claim` - Claim time-limited waitlist offer and confirm booking
+### Bookings and Waitlist (`/api/bookings`, `/api/waitlist`)
+* `POST /api/bookings/confirm` - Convert active holds or waitlist offers into confirmed tickets
+* `GET /api/bookings/my` - Customer booking history and QR codes
+* `POST /api/bookings/:bookingId/cancel` - Cancel booking and trigger waitlist reallocation
+* `POST /api/bookings/verify` - Admission gate scanner validation
+* `POST /api/waitlist/join` - Join seat category waitlist for sold-out showtimes
+* `GET /api/waitlist/my` - Retrieve active waitlist positions and pending offers
+* `POST /api/waitlist/offers/:offerId/claim` - Claim time-limited waitlist offer
 
-
----
-
-## 🗄️ Database Schema Diagram
-
-```
-[User] ───< [Event] ───< [Show] ───< [ShowSeat] ───> [Seat] ───> [Venue]
-  │                        │            │
-  ├───< [SeatHold] ────────┤            ├───< [Booking]
-  ├───< [WaitlistEntry] ───┤            └───< [WaitlistOffer]
-```
+### System Health
+* `GET /api/health` - Liveness probe
+* `GET /api/ready` - Database readiness probe
 
 ---
 
-## 📄 Deliverables Summary
-1. Source Code with modular architecture in `src/`.
-2. System Design Write-Up in `SYSTEM_DESIGN.md`.
-3. Complete Jest Test Suite in `src/tests/backend.test.ts`.
+## Production Deployment Checklist
+
+1. **Object Storage CORS**: Configure CORS on the S3 / Cloudflare R2 bucket to permit `PUT` and `GET` requests from the production domain.
+2. **CDN Distribution**: Connect a custom domain or Cloudflare / CloudFront distribution to your bucket for cached asset delivery.
+3. **Environment Secrets**: Populate production environment variables (`JWT_SECRET`, `ADMIN_SECRET`, SMTP credentials, S3 keys) in hosting dashboards (Render, Railway, AWS ECS, Vercel).
+4. **Database Migration**: Run `npx prisma migrate deploy` or `npx prisma db push` during build steps.
