@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "dev:client": "npm run dev --prefix client",
     "dev:all": "npx concurrently \"npm run dev\" \"npm run dev:client\"",
-    "build": "tsc && npm run build --prefix client",
+    "build": "tsc",
     "start": "node dist/server.js",
     "test": "jest --runInBand"
   },
