@@ -5,21 +5,35 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendWaitlistOfferEmail = exports.sendBookingConfirmationEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
-// Transporter using ethereal or local mock for easy development testing
+const env_1 = require("../config/env");
+// Transporter using configured SMTP or ethereal for development
 let transporter = null;
 const getTransporter = async () => {
     if (!transporter) {
-        // Generate test Ethereal account if no custom SMTP provided
-        const testAccount = await nodemailer_1.default.createTestAccount();
-        transporter = nodemailer_1.default.createTransport({
-            host: testAccount.smtp.host,
-            port: testAccount.smtp.port,
-            secure: testAccount.smtp.secure,
-            auth: {
-                user: testAccount.user,
-                pass: testAccount.pass,
-            },
-        });
+        if (env_1.ENV.SMTP_HOST && env_1.ENV.SMTP_USER && env_1.ENV.SMTP_PASS) {
+            transporter = nodemailer_1.default.createTransport({
+                host: env_1.ENV.SMTP_HOST,
+                port: env_1.ENV.SMTP_PORT || 587,
+                secure: (env_1.ENV.SMTP_PORT || 587) === 465,
+                auth: {
+                    user: env_1.ENV.SMTP_USER,
+                    pass: env_1.ENV.SMTP_PASS,
+                },
+            });
+        }
+        else {
+            // Generate test Ethereal account if no custom SMTP provided
+            const testAccount = await nodemailer_1.default.createTestAccount();
+            transporter = nodemailer_1.default.createTransport({
+                host: testAccount.smtp.host,
+                port: testAccount.smtp.port,
+                secure: testAccount.smtp.secure,
+                auth: {
+                    user: testAccount.user,
+                    pass: testAccount.pass,
+                },
+            });
+        }
     }
     return transporter;
 };

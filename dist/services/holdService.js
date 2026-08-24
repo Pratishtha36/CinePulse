@@ -8,12 +8,18 @@ const holdSeats = async (customerId, showId, showSeatIds) => {
     if (!showSeatIds || showSeatIds.length === 0) {
         throw { statusCode: 400, message: 'At least one seat must be selected to hold' };
     }
+    if (showSeatIds.length > env_1.ENV.MAX_SEATS_PER_HOLD) {
+        throw {
+            statusCode: 400,
+            message: `Cannot hold more than ${env_1.ENV.MAX_SEATS_PER_HOLD} seats in a single request`,
+        };
+    }
     const ttlMinutes = env_1.ENV.SEAT_HOLD_TTL_MINUTES;
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
     // Execute in isolated database transaction for concurrency protection
     const result = await prisma_1.prisma.$transaction(async (tx) => {
         const now = new Date();
-        // 1. Fetch requested showSeats with their current holds
+        // 1. Fetch requested showSeats with their current holds and active waitlist offers
         const showSeats = await tx.showSeat.findMany({
             where: {
                 id: { in: showSeatIds },
@@ -22,6 +28,10 @@ const holdSeats = async (customerId, showId, showSeatIds) => {
             include: {
                 seat: true,
                 hold: true,
+                waitlistOffers: {
+                    where: { status: 'PENDING' },
+                    include: { waitlistEntry: true },
+                },
             },
         });
         if (showSeats.length !== showSeatIds.length) {
@@ -35,21 +45,50 @@ const holdSeats = async (customerId, showId, showSeatIds) => {
                     message: `Seat ${ss.seat.rowLabel}${ss.seat.colNumber} is already booked`,
                 };
             }
-            if (ss.status === 'HELD' && ss.hold) {
-                if (ss.hold.expiresAt <= now || ss.hold.status !== 'ACTIVE') {
-                    // Expired hold - auto cleanup
-                    await tx.seatHold.delete({ where: { id: ss.hold.id } });
+            if (ss.status === 'HELD') {
+                if (ss.hold) {
+                    if (ss.hold.expiresAt <= now || ss.hold.status !== 'ACTIVE') {
+                        // Expired hold - auto cleanup
+                        await tx.seatHold.delete({ where: { id: ss.hold.id } });
+                    }
+                    else if (ss.hold.customerId !== customerId) {
+                        // Active hold by someone else!
+                        throw {
+                            statusCode: 409,
+                            message: `Seat ${ss.seat.rowLabel}${ss.seat.colNumber} is currently held by another user`,
+                        };
+                    }
+                    else {
+                        // Held by the SAME customer - refresh hold expiry
+                        await tx.seatHold.delete({ where: { id: ss.hold.id } });
+                    }
                 }
-                else if (ss.hold.customerId !== customerId) {
-                    // Active hold by someone else!
-                    throw {
-                        statusCode: 409,
-                        message: `Seat ${ss.seat.rowLabel}${ss.seat.colNumber} is currently held by another user`,
-                    };
+                else if (ss.waitlistOffers && ss.waitlistOffers.length > 0) {
+                    const pendingOffer = ss.waitlistOffers[0];
+                    if (pendingOffer.offerExpiresAt <= now) {
+                        // Expired offer - mark expired
+                        await tx.waitlistOffer.update({
+                            where: { id: pendingOffer.id },
+                            data: { status: 'EXPIRED' },
+                        });
+                        await tx.waitlistEntry.update({
+                            where: { id: pendingOffer.waitlistEntryId },
+                            data: { status: 'EXPIRED' },
+                        });
+                    }
+                    else if (pendingOffer.waitlistEntry.customerId !== customerId) {
+                        throw {
+                            statusCode: 409,
+                            message: `Seat ${ss.seat.rowLabel}${ss.seat.colNumber} is currently reserved for a waitlist offer`,
+                        };
+                    }
                 }
                 else {
-                    // Held by the SAME customer - refresh hold expiry
-                    await tx.seatHold.delete({ where: { id: ss.hold.id } });
+                    // In case status is HELD without active hold or offer, reset to available
+                    await tx.showSeat.update({
+                        where: { id: ss.id },
+                        data: { status: 'AVAILABLE' },
+                    });
                 }
             }
         }
@@ -75,7 +114,7 @@ const holdSeats = async (customerId, showId, showSeatIds) => {
             createdHolds.push(hold);
         }
         return { showSeats, createdHolds, expiresAt };
-    });
+    }, { maxWait: 15000, timeout: 20000 });
     // Broadcast real-time Socket.io update
     (0, socketManager_1.emitSeatStatusUpdate)(showId, 'held', {
         showSeatIds,

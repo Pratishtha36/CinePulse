@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && npm install --prefix client && npm run build --prefix client",
+    "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },

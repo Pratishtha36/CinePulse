@@ -164,6 +164,21 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
         expect(res.body.bookingReference).toContain('TKT-');
         expect(res.body.tickets[0].price).toBe(100); // VIP price 100
         expect(res.body.tickets[0].qrCodeDataUrl).toContain('data:image/png;base64,');
+        // Book all remaining VIP seats (A2, A3, A4) so VIP category is 100% sold out for waitlist test
+        const allSeatsRes = await (0, supertest_1.default)(app_1.default).get(`/api/shows/${showId}/seats`);
+        const otherVipSeats = allSeatsRes.body.seats.filter((s) => s.category === 'VIP' && s.status === 'AVAILABLE');
+        for (let i = 0; i < otherVipSeats.length; i++) {
+            const seat = otherVipSeats[i];
+            const token = concurrentTokens[i];
+            await (0, supertest_1.default)(app_1.default)
+                .post(`/api/shows/${showId}/hold`)
+                .set('Authorization', `Bearer ${token}`)
+                .send({ showSeatIds: [seat.showSeatId] });
+            await (0, supertest_1.default)(app_1.default)
+                .post('/api/bookings/confirm')
+                .set('Authorization', `Bearer ${token}`)
+                .send({ showId, showSeatIds: [seat.showSeatId] });
+        }
     });
     test('7. Hold Abandonment & Manual Release', async () => {
         // Alice holds Premium seat B1
@@ -185,7 +200,8 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
         expect(b1Seat.status).toBe('AVAILABLE');
     });
     test('8. Automated Waitlist Queue & Reallocation Flow on Cancellation', async () => {
-        // Bob joins waitlist for VIP category (since A1 VIP seat is currently booked by Alice)
+        // VIP category is now 100% sold out (A1, A2, A3, A4 are all booked)
+        // Bob joins waitlist for VIP category
         const waitlistRes = await (0, supertest_1.default)(app_1.default)
             .post('/api/waitlist/join')
             .set('Authorization', `Bearer ${customer2Token}`)
@@ -196,10 +212,10 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
         const myBookings = await (0, supertest_1.default)(app_1.default)
             .get('/api/bookings/my')
             .set('Authorization', `Bearer ${customer1Token}`);
-        const activeBooking = myBookings.body.find((b) => b.status === 'CONFIRMED');
-        expect(activeBooking).toBeDefined();
+        const aliceBooking = myBookings.body.find((b) => b.status === 'CONFIRMED' && b.showSeat.showSeatId === vipShowSeatId || b.showSeat.seat.rowLabel === 'A' && b.showSeat.seat.colNumber === 1);
+        expect(aliceBooking).toBeDefined();
         const cancelRes = await (0, supertest_1.default)(app_1.default)
-            .post(`/api/bookings/${activeBooking.id}/cancel`)
+            .post(`/api/bookings/${aliceBooking.id}/cancel`)
             .set('Authorization', `Bearer ${customer1Token}`);
         expect(cancelRes.status).toBe(200);
         // Verify Bob automatically received a pending Waitlist Offer!
@@ -210,6 +226,12 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
         const offer = bobsWaitlists.body[0].offers[0];
         expect(offer).toBeDefined();
         expect(offer.status).toBe('PENDING');
+        // Bob inspects the offer details
+        const offerDetails = await (0, supertest_1.default)(app_1.default)
+            .get(`/api/waitlist/offers/${offer.id}`)
+            .set('Authorization', `Bearer ${customer2Token}`);
+        expect(offerDetails.status).toBe(200);
+        expect(offerDetails.body.category).toBe('VIP');
         // Bob claims the waitlist offer and converts it to a booking!
         const claimRes = await (0, supertest_1.default)(app_1.default)
             .post(`/api/waitlist/offers/${offer.id}/claim`)
@@ -220,6 +242,14 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
         });
         expect(claimRes.status).toBe(200);
         expect(claimRes.body.bookingReference).toContain('TKT-');
+        // 10. Verify Ticket using verification endpoint (Organiser / Gate Staff)
+        const verifyRes = await (0, supertest_1.default)(app_1.default)
+            .post('/api/bookings/verify')
+            .set('Authorization', `Bearer ${organiserToken}`)
+            .send({ bookingReference: claimRes.body.bookingReference });
+        expect(verifyRes.status).toBe(200);
+        expect(verifyRes.body.valid).toBe(true);
+        expect(verifyRes.body.customer.email).toBe('bob@gmail.com');
     });
     test('9. Organiser Revenue Summary', async () => {
         const res = await (0, supertest_1.default)(app_1.default)
@@ -227,6 +257,15 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
             .set('Authorization', `Bearer ${organiserToken}`);
         expect(res.status).toBe(200);
         expect(res.body.length).toBe(1);
-        expect(res.body[0].totalRevenue).toBe(100); // Bob booked 1 VIP ticket for 100
+        // 4 VIP tickets booked total = 400
+        expect(res.body[0].totalRevenue).toBe(400);
+    });
+    test('10. Admin Venue Update and Route Coverage', async () => {
+        const updateRes = await (0, supertest_1.default)(app_1.default)
+            .put(`/api/admin/venues/${venueId}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .send({ name: 'Grand Arena Hall (Renovated)' });
+        expect(updateRes.status).toBe(200);
+        expect(updateRes.body.name).toBe('Grand Arena Hall (Renovated)');
     });
 });

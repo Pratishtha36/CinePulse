@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getCustomerWaitlists = exports.autoAdvanceExpiredWaitlistOffers = exports.processCancelledSeatWaitlist = exports.joinWaitlist = void 0;
+exports.getCustomerWaitlists = exports.autoAdvanceExpiredWaitlistOffers = exports.processCancelledSeatWaitlist = exports.getWaitlistOfferDetails = exports.leaveWaitlist = exports.joinWaitlist = void 0;
 const prisma_1 = require("../config/prisma");
 const env_1 = require("../config/env");
 const emailService_1 = require("./emailService");
@@ -16,6 +16,21 @@ const joinWaitlist = async (customerId, showId, seatCategory) => {
     const categoryPrices = JSON.parse(show.categoryPrices || '{}');
     if (!(seatCategory in categoryPrices)) {
         throw { statusCode: 400, message: `Invalid seat category '${seatCategory}' for this show` };
+    }
+    // Requirement: Waitlist is for sold-out categories
+    const now = new Date();
+    const availableSeatsCount = await prisma_1.prisma.showSeat.count({
+        where: {
+            showId,
+            seat: { category: seatCategory },
+            status: 'AVAILABLE',
+        },
+    });
+    if (availableSeatsCount > 0) {
+        throw {
+            statusCode: 400,
+            message: `Seats are currently available in category '${seatCategory}' (${availableSeatsCount} left). You can hold and book directly from the seat map.`,
+        };
     }
     // Check if customer already waiting for this show and category
     const existing = await prisma_1.prisma.waitlistEntry.findFirst({
@@ -56,6 +71,58 @@ const joinWaitlist = async (customerId, showId, seatCategory) => {
     };
 };
 exports.joinWaitlist = joinWaitlist;
+const leaveWaitlist = async (customerId, waitlistId) => {
+    const entry = await prisma_1.prisma.waitlistEntry.findUnique({
+        where: { id: waitlistId },
+    });
+    if (!entry)
+        throw { statusCode: 404, message: 'Waitlist entry not found' };
+    if (entry.customerId !== customerId) {
+        throw { statusCode: 403, message: 'Not authorized to modify this waitlist entry' };
+    }
+    if (entry.status !== 'WAITING') {
+        throw { statusCode: 400, message: `Cannot cancel waitlist entry with status '${entry.status}'` };
+    }
+    await prisma_1.prisma.waitlistEntry.update({
+        where: { id: waitlistId },
+        data: { status: 'CANCELLED' },
+    });
+    return { message: 'Successfully removed from waitlist.' };
+};
+exports.leaveWaitlist = leaveWaitlist;
+const getWaitlistOfferDetails = async (offerId) => {
+    const offer = await prisma_1.prisma.waitlistOffer.findUnique({
+        where: { id: offerId },
+        include: {
+            waitlistEntry: { include: { customer: { select: { id: true, name: true, email: true } } } },
+            showSeat: {
+                include: {
+                    seat: true,
+                    show: { include: { event: true, venue: true } },
+                },
+            },
+        },
+    });
+    if (!offer)
+        throw { statusCode: 404, message: 'Waitlist offer not found' };
+    const isExpired = offer.offerExpiresAt <= new Date() || offer.status !== 'PENDING';
+    const categoryPrices = JSON.parse(offer.showSeat.show.categoryPrices || '{}');
+    return {
+        offerId: offer.id,
+        status: isExpired && offer.status === 'PENDING' ? 'EXPIRED' : offer.status,
+        showId: offer.showSeat.showId,
+        showSeatId: offer.showSeatId,
+        eventTitle: offer.showSeat.show.event.title,
+        venueName: offer.showSeat.show.venue.name,
+        showStartTime: offer.showSeat.show.startTime,
+        seatLabel: `${offer.showSeat.seat.rowLabel}${offer.showSeat.seat.colNumber}`,
+        category: offer.showSeat.seat.category,
+        price: categoryPrices[offer.showSeat.seat.category] || 0,
+        offerExpiresAt: offer.offerExpiresAt,
+        customer: offer.waitlistEntry.customer,
+    };
+};
+exports.getWaitlistOfferDetails = getWaitlistOfferDetails;
 const processCancelledSeatWaitlist = async (showSeatId) => {
     const showSeat = await prisma_1.prisma.showSeat.findUnique({
         where: { id: showSeatId },
@@ -96,9 +163,9 @@ const processCancelledSeatWaitlist = async (showSeatId) => {
                     status: 'PENDING',
                 },
             });
-            const claimUrl = `http://localhost:${env_1.ENV.PORT}/api/waitlist/offers/${offer.id}/claim`;
+            const claimUrl = `${env_1.ENV.CLIENT_URL}/claim/${offer.id}`;
             // Send email notification with claim link
-            await (0, emailService_1.sendWaitlistOfferEmail)({
+            (0, emailService_1.sendWaitlistOfferEmail)({
                 toEmail: nextWaitlistEntry.customer.email,
                 customerName: nextWaitlistEntry.customer.name,
                 eventTitle: showSeat.show.event.title,
@@ -106,7 +173,7 @@ const processCancelledSeatWaitlist = async (showSeatId) => {
                 seatLabel: `${showSeat.seat.rowLabel}${showSeat.seat.colNumber}`,
                 offerExpiresAt,
                 claimOfferUrl: claimUrl,
-            });
+            }).catch((err) => console.error('[WAITLIST EMAIL ERROR]:', err));
         });
         (0, socketManager_1.emitSeatStatusUpdate)(showId, 'held', {
             showSeatIds: [showSeatId],

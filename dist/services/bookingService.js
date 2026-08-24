@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getCustomerBookings = exports.cancelBooking = exports.confirmBooking = void 0;
+exports.getCustomerBookings = exports.verifyBookingTicket = exports.cancelBooking = exports.confirmBooking = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const prisma_1 = require("../config/prisma");
 const qrService_1 = require("./qrService");
@@ -29,6 +29,31 @@ const confirmBooking = async (customerId, params) => {
         const categoryPrices = JSON.parse(show.categoryPrices || '{}');
         const now = new Date();
         const createdBookings = [];
+        // If claiming a waitlist offer, validate it applies to exactly this seat
+        if (waitlistOfferId) {
+            if (showSeatIds.length !== 1) {
+                throw { statusCode: 400, message: 'A waitlist offer can only be claimed for exactly 1 seat' };
+            }
+            const offer = await tx.waitlistOffer.findUnique({
+                where: { id: waitlistOfferId },
+                include: { waitlistEntry: true },
+            });
+            if (!offer ||
+                offer.status !== 'PENDING' ||
+                offer.offerExpiresAt <= now ||
+                offer.waitlistEntry.customerId !== customerId ||
+                offer.showSeatId !== showSeatIds[0]) {
+                throw { statusCode: 400, message: 'Invalid, expired, or mismatched waitlist offer for this seat' };
+            }
+            await tx.waitlistOffer.update({
+                where: { id: offer.id },
+                data: { status: 'CLAIMED' },
+            });
+            await tx.waitlistEntry.update({
+                where: { id: offer.waitlistEntryId },
+                data: { status: 'BOOKED' },
+            });
+        }
         for (const showSeatId of showSeatIds) {
             const showSeat = await tx.showSeat.findUnique({
                 where: { id: showSeatId },
@@ -40,29 +65,8 @@ const confirmBooking = async (customerId, params) => {
             if (showSeat.status === 'BOOKED') {
                 throw { statusCode: 409, message: `Seat ${showSeat.seat.rowLabel}${showSeat.seat.colNumber} is already booked` };
             }
-            // Check if user is claiming via waitlist offer
-            if (waitlistOfferId) {
-                const offer = await tx.waitlistOffer.findUnique({
-                    where: { id: waitlistOfferId },
-                    include: { waitlistEntry: true },
-                });
-                if (!offer ||
-                    offer.status !== 'PENDING' ||
-                    offer.offerExpiresAt <= now ||
-                    offer.waitlistEntry.customerId !== customerId) {
-                    throw { statusCode: 400, message: 'Invalid or expired waitlist offer' };
-                }
-                await tx.waitlistOffer.update({
-                    where: { id: offer.id },
-                    data: { status: 'CLAIMED' },
-                });
-                await tx.waitlistEntry.update({
-                    where: { id: offer.waitlistEntryId },
-                    data: { status: 'BOOKED' },
-                });
-            }
-            else {
-                // Normal hold check
+            // Normal hold check if not claiming via waitlist offer
+            if (!waitlistOfferId) {
                 if (!showSeat.hold || showSeat.hold.customerId !== customerId || showSeat.hold.expiresAt <= now) {
                     throw {
                         statusCode: 400,
@@ -106,7 +110,7 @@ const confirmBooking = async (customerId, params) => {
             createdBookings.push(booking);
         }
         return { createdBookings, show };
-    });
+    }, { maxWait: 15000, timeout: 20000 });
     const bookings = bookingsCreated.createdBookings;
     const show = bookingsCreated.show;
     // Send confirmation emails and emit real-time socket updates
@@ -132,10 +136,24 @@ const confirmBooking = async (customerId, params) => {
         message: 'Booking confirmed successfully!',
         bookingReference: mainBookingRef,
         totalPaid,
+        totalAmount: totalPaid,
+        eventTitle: show.event.title,
+        venueName: show.venue.name,
+        startTime: show.startTime,
+        qrCode: bookings[0]?.qrCodeData,
+        qrCodeDataUrl: bookings[0]?.qrCodeData,
+        show: {
+            id: show.id,
+            startTime: show.startTime,
+            event: { title: show.event.title },
+            venue: { name: show.venue.name },
+        },
         tickets: bookings.map((b) => ({
             bookingId: b.id,
             bookingReference: b.bookingReference,
             seat: `${b.showSeat.seat.rowLabel}${b.showSeat.seat.colNumber}`,
+            rowLabel: b.showSeat.seat.rowLabel,
+            colNumber: b.showSeat.seat.colNumber,
             category: b.showSeat.seat.category,
             price: b.pricePaid,
             qrCodeDataUrl: b.qrCodeData,
@@ -148,6 +166,7 @@ const cancelBooking = async (customerId, bookingId) => {
         where: { id: bookingId },
         include: {
             showSeat: { include: { seat: true } },
+            show: true,
             customer: true,
         },
     });
@@ -158,6 +177,12 @@ const cancelBooking = async (customerId, bookingId) => {
     }
     if (booking.status === 'CANCELLED') {
         throw { statusCode: 400, message: 'Booking is already cancelled' };
+    }
+    if (new Date(booking.show.startTime) <= new Date()) {
+        throw {
+            statusCode: 400,
+            message: 'Cannot cancel booking for a show that has already started or ended.',
+        };
     }
     // Cancel booking in transaction
     await prisma_1.prisma.$transaction(async (tx) => {
@@ -176,6 +201,33 @@ const cancelBooking = async (customerId, bookingId) => {
     };
 };
 exports.cancelBooking = cancelBooking;
+const verifyBookingTicket = async (bookingReference) => {
+    const booking = await prisma_1.prisma.booking.findUnique({
+        where: { bookingReference },
+        include: {
+            customer: { select: { id: true, name: true, email: true } },
+            showSeat: { include: { seat: true } },
+            show: { include: { event: true, venue: true } },
+        },
+    });
+    if (!booking) {
+        throw { statusCode: 404, message: 'Ticket reference not found' };
+    }
+    return {
+        valid: booking.status === 'CONFIRMED',
+        status: booking.status,
+        bookingReference: booking.bookingReference,
+        customer: booking.customer,
+        eventTitle: booking.show.event.title,
+        venueName: booking.show.venue.name,
+        showStartTime: booking.show.startTime,
+        seat: `${booking.showSeat.seat.rowLabel}${booking.showSeat.seat.colNumber}`,
+        category: booking.showSeat.seat.category,
+        pricePaid: booking.pricePaid,
+        createdAt: booking.createdAt,
+    };
+};
+exports.verifyBookingTicket = verifyBookingTicket;
 const getCustomerBookings = async (customerId) => {
     return await prisma_1.prisma.booking.findMany({
         where: { customerId },
