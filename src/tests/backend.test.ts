@@ -316,5 +316,57 @@ describe('Ticket Booking System - Comprehensive Backend & Concurrency Test Suite
     expect(updateRes.status).toBe(200);
     expect(updateRes.body.name).toBe('Grand Arena Hall (Renovated)');
   });
+
+  test('11. Poster Upload: Presigned URL Generation and Validation', async () => {
+    // 1. Request presigned URL with valid image
+    const presignedRes = await request(app)
+      .post('/api/organiser/upload/presigned-url')
+      .set('Authorization', `Bearer ${organiserToken}`)
+      .send({
+        fileName: 'dune-part-two.jpg',
+        fileType: 'image/jpeg',
+        fileSize: 1024 * 500, // 500KB
+      });
+
+    expect(presignedRes.status).toBe(200);
+    expect(presignedRes.body.storageType).toBeDefined();
+    expect(presignedRes.body.uploadUrl).toBeDefined();
+
+    // 2. Reject unsupported MIME type
+    const invalidTypeRes = await request(app)
+      .post('/api/organiser/upload/presigned-url')
+      .set('Authorization', `Bearer ${organiserToken}`)
+      .send({
+        fileName: 'malicious.exe',
+        fileType: 'application/x-msdownload',
+        fileSize: 1024,
+      });
+
+    expect(invalidTypeRes.status).toBe(400);
+
+    // 3. Reject oversized file (> 5MB)
+    const oversizedRes = await request(app)
+      .post('/api/organiser/upload/presigned-url')
+      .set('Authorization', `Bearer ${organiserToken}`)
+      .send({
+        fileName: 'huge.jpg',
+        fileType: 'image/jpeg',
+        fileSize: 10 * 1024 * 1024, // 10MB
+      });
+
+    expect(oversizedRes.status).toBe(400);
+
+    // 4. Local fallback upload test
+    const localUploadRes = await request(app)
+      .post('/api/organiser/upload/local')
+      .set('Authorization', `Bearer ${organiserToken}`)
+      .attach('poster', Buffer.from('mock-image-data'), 'test-poster.jpg');
+
+    expect(localUploadRes.status).toBe(200);
+    expect(
+      localUploadRes.body.fileUrl.includes('/posters/') ||
+      localUploadRes.body.fileUrl.includes('/uploads/posters/')
+    ).toBe(true);
+  });
 });
 

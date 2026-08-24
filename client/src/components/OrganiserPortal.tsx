@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { QrCode } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { QrCode, UploadCloud, Image as ImageIcon, CheckCircle, X, Loader2 } from 'lucide-react';
 
-import { fetchAPI } from '../services/api';
+import { fetchAPI, uploadPosterImage } from '../services/api';
 
 export const OrganiserPortal: React.FC = () => {
   const [events, setEvents] = useState<any[]>([]);
@@ -13,6 +13,15 @@ export const OrganiserPortal: React.FC = () => {
   const [description, setDescription] = useState('');
   const [type, setType] = useState<'MOVIE' | 'CONCERT'>('MOVIE');
   const [posterUrl, setPosterUrl] = useState('');
+
+  // Poster Image Upload States
+  const [posterMode, setPosterMode] = useState<'upload' | 'url'>('upload');
+  const [posterFile, setPosterFile] = useState<File | null>(null);
+  const [posterPreview, setPosterPreview] = useState<string | null>(null);
+  const [isUploadingPoster, setIsUploadingPoster] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Show Creation states
   const [selectedEventId, setSelectedEventId] = useState('');
@@ -28,6 +37,7 @@ export const OrganiserPortal: React.FC = () => {
   const [verifyResult, setVerifyResult] = useState<any>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
 
+  const [isPublishing, setIsPublishing] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -51,29 +61,117 @@ export const OrganiserPortal: React.FC = () => {
     loadData();
   }, []);
 
+  const handleFileProcess = async (file: File) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/avif'];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      setErrorMsg('Invalid file format. Please upload JPG, PNG, WebP, or AVIF.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMsg(`File size ${(file.size / (1024 * 1024)).toFixed(2)}MB exceeds the 5MB limit.`);
+      return;
+    }
+
+    setPosterFile(file);
+    const localPreview = URL.createObjectURL(file);
+    setPosterPreview(localPreview);
+    setIsUploadingPoster(true);
+    setUploadProgress(0);
+    setErrorMsg('');
+
+    try {
+      const cdnUrl = await uploadPosterImage(file, (percent) => {
+        setUploadProgress(percent);
+      });
+      setPosterUrl(cdnUrl);
+      setSuccessMsg('Poster image uploaded successfully.');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to upload poster image.');
+      setPosterFile(null);
+      setPosterPreview(null);
+      setPosterUrl('');
+    } finally {
+      setIsUploadingPoster(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileProcess(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleRemovePoster = () => {
+    setPosterFile(null);
+    setPosterPreview(null);
+    setPosterUrl('');
+    setUploadProgress(0);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
+    if (isUploadingPoster) {
+      setErrorMsg('Please wait for the poster upload to finish before publishing.');
+      return;
+    }
+
+    if (!title.trim() || title.trim().length < 2) {
+      setErrorMsg('Event title must be at least 2 characters long.');
+      return;
+    }
+
+    if (!description.trim() || description.trim().length < 5) {
+      setErrorMsg('Event description must be at least 5 characters long.');
+      return;
+    }
+
     try {
+      setIsPublishing(true);
       const created = await fetchAPI('/organiser/events', {
         method: 'POST',
         body: JSON.stringify({
-          title,
-          description,
+          title: title.trim(),
+          description: description.trim(),
           type,
-          posterUrl: posterUrl || undefined,
+          posterUrl: posterUrl ? posterUrl.trim() : undefined,
         }),
       });
 
-      setSuccessMsg(`Event listing '${created.title}' published!`);
+      setSuccessMsg(`Event listing '${created.title}' published successfully!`);
       setTitle('');
       setDescription('');
       setPosterUrl('');
-      loadData();
+      setPosterFile(null);
+      setPosterPreview(null);
+      setUploadProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      await loadData();
     } catch (err: any) {
-      setErrorMsg(err.message);
+      setErrorMsg(err.message || 'Failed to publish event listing.');
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -234,33 +332,166 @@ export const OrganiserPortal: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-1">
-                    PRODUCTION CATEGORY
-                  </label>
-                  <select
-                    value={type}
-                    onChange={(e: any) => setType(e.target.value)}
-                    className="swiss-input w-full font-black uppercase"
-                  >
-                    <option value="MOVIE">CINEMA (MOVIE)</option>
-                    <option value="CONCERT">LIVE CONCERT (MUSIC)</option>
-                  </select>
+              <div>
+                <label className="block text-xs font-black uppercase tracking-wider text-black mb-1">
+                  PRODUCTION CATEGORY
+                </label>
+                <select
+                  value={type}
+                  onChange={(e: any) => setType(e.target.value)}
+                  className="swiss-input w-full font-black uppercase"
+                >
+                  <option value="MOVIE">CINEMA (MOVIE)</option>
+                  <option value="CONCERT">LIVE CONCERT (MUSIC)</option>
+                </select>
+              </div>
+
+              {/* Poster Asset Uploader (Production S3 Direct / Local) */}
+              <div className="border-2 border-black p-4 bg-[#FAFAFA]">
+                <div className="flex items-center justify-between mb-3 border-b-2 border-black pb-2">
+                  <span className="text-xs font-mono font-black uppercase tracking-wider text-black flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5 text-[#FF3000]" />
+                    EVENT POSTER ASSET
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setPosterMode('upload')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-black uppercase tracking-wider border transition-colors ${
+                        posterMode === 'upload'
+                          ? 'bg-black text-white border-black'
+                          : 'bg-white text-neutral-600 border-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      FILE UPLOAD
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPosterMode('url')}
+                      className={`px-2.5 py-1 text-[10px] font-mono font-black uppercase tracking-wider border transition-colors ${
+                        posterMode === 'url'
+                          ? 'bg-black text-white border-black'
+                          : 'bg-white text-neutral-600 border-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      DIRECT URL
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-1">
-                    POSTER IMAGE URL
-                  </label>
-                  <input
-                    type="url"
-                    value={posterUrl}
-                    onChange={(e) => setPosterUrl(e.target.value)}
-                    placeholder="https://images.unsplash.com/..."
-                    className="swiss-input w-full text-xs font-mono"
-                  />
-                </div>
+                {posterMode === 'upload' ? (
+                  <div>
+                    {posterPreview || posterUrl ? (
+                      <div className="flex items-start gap-4 p-3 bg-white border-2 border-black">
+                        {/* Thumbnail */}
+                        <div className="w-20 h-28 shrink-0 bg-neutral-200 border border-black overflow-hidden relative">
+                          <img
+                            src={posterPreview || posterUrl}
+                            alt="Poster Preview"
+                            className="w-full h-full object-cover"
+                          />
+                          {isUploadingPoster && (
+                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                              <Loader2 className="w-5 h-5 text-white animate-spin" />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Details & Controls */}
+                        <div className="flex-1 min-w-0 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black uppercase tracking-tight text-black truncate block">
+                              {posterFile ? posterFile.name : 'Uploaded Poster'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRemovePoster}
+                              disabled={isUploadingPoster}
+                              className="text-[10px] font-mono font-black uppercase tracking-wider text-[#FF3000] hover:underline flex items-center gap-1"
+                            >
+                              <X className="w-3.5 h-3.5" /> REMOVE
+                            </button>
+                          </div>
+
+                          {posterFile && (
+                            <span className="text-[10px] font-mono text-neutral-500 block">
+                              {(posterFile.size / (1024 * 1024)).toFixed(2)} MB • {posterFile.type}
+                            </span>
+                          )}
+
+                          {isUploadingPoster ? (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[10px] font-mono font-bold text-neutral-600">
+                                <span>UPLOADING TO STORAGE...</span>
+                                <span>{uploadProgress}%</span>
+                              </div>
+                              <div className="w-full h-2 bg-neutral-200 border border-black overflow-hidden">
+                                <div
+                                  className="h-full bg-[#FF3000] transition-all duration-150"
+                                  style={{ width: `${uploadProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-[11px] font-mono font-black text-[#10b981] uppercase tracking-wider">
+                              <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>STORAGE ASSET READY</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      /* Drag & Drop Box */
+                      <div
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        onClick={() => fileInputRef.current?.click()}
+                        className={`p-6 border-2 border-dashed text-center cursor-pointer transition-all ${
+                          isDragging
+                            ? 'border-[#FF3000] bg-[#FF3000]/5'
+                            : 'border-black bg-white hover:border-[#FF3000] hover:bg-neutral-50'
+                        }`}
+                      >
+                        <UploadCloud className="w-8 h-8 mx-auto mb-2 text-neutral-600" />
+                        <span className="block text-xs font-black uppercase tracking-wider text-black">
+                          DRAG & DROP POSTER OR CLICK TO BROWSE
+                        </span>
+                        <span className="block text-[10px] font-mono font-bold text-neutral-500 uppercase mt-1">
+                          SUPPORTS JPG, PNG, WEBP, AVIF (MAX 5MB • 2:3 RATIO RECOMMENDED)
+                        </span>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/jpeg,image/jpg,image/png,image/webp,image/avif"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleFileProcess(e.target.files[0]);
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Fallback Direct URL Input */
+                  <div className="space-y-2">
+                    <input
+                      type="url"
+                      value={posterUrl}
+                      onChange={(e) => {
+                        setPosterUrl(e.target.value);
+                        setPosterPreview(e.target.value);
+                      }}
+                      placeholder="https://images.unsplash.com/..."
+                      className="swiss-input w-full text-xs font-mono"
+                    />
+                    <span className="text-[10px] font-mono font-bold text-neutral-500 block">
+                      PASTE A DIRECT ACCESSIBLE IMAGE URL (HTTPS)
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -277,11 +508,37 @@ export const OrganiserPortal: React.FC = () => {
                 />
               </div>
 
+              {/* Inline Feedback directly in form */}
+              {errorMsg && (
+                <div className="p-3 bg-black text-[#FF3000] text-xs font-mono font-bold uppercase tracking-wider border-2 border-[#FF3000] animate-in fade-in">
+                  ⚠️ {errorMsg}
+                </div>
+              )}
+
+              {successMsg && (
+                <div className="p-3 bg-black text-[#10b981] text-xs font-mono font-bold uppercase tracking-wider border-2 border-[#10b981] animate-in fade-in">
+                  ✓ {successMsg}
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="swiss-btn-primary w-full py-3 text-xs tracking-widest mt-2"
+                disabled={isPublishing || isUploadingPoster}
+                className="swiss-btn-primary w-full py-3 text-xs tracking-widest mt-2 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                PUBLISH EVENT LISTING →
+                {isPublishing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>PUBLISHING CATALOG LISTING...</span>
+                  </>
+                ) : isUploadingPoster ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>UPLOADING POSTER ASSET ({uploadProgress}%)...</span>
+                  </>
+                ) : (
+                  <span>PUBLISH EVENT LISTING →</span>
+                )}
               </button>
             </form>
           </div>

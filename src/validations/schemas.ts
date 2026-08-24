@@ -49,7 +49,13 @@ export const createEventSchema = z.object({
   title: z.string().min(2, 'Title must be at least 2 characters').max(150),
   description: z.string().min(5, 'Description must be at least 5 characters'),
   type: z.enum(['MOVIE', 'CONCERT']),
-  posterUrl: z.string().url('Invalid poster URL').optional().or(z.literal('')),
+  posterUrl: z.string().max(2048).optional().or(z.literal('')),
+});
+
+export const presignedPosterUploadSchema = z.object({
+  fileName: z.string().min(1, 'File name is required').max(255),
+  fileType: z.string().min(1, 'File MIME type is required'),
+  fileSize: z.number().int().positive('File size must be positive').max(5 * 1024 * 1024, 'File size cannot exceed 5MB'),
 });
 
 export const createShowSchema = z.object({

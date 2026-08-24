@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 import { prisma } from './config/prisma';
 import authRoutes from './routes/authRoutes';
 import adminRoutes from './routes/adminRoutes';
@@ -23,6 +24,9 @@ app.use(
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+// Serve locally uploaded files (development fallback)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 // Anti-Abuse & Anti-Scalper Rate Limiters (disabled during automated test runs)
 const isTestEnv = process.env.NODE_ENV === 'test';
 
@@ -42,6 +46,14 @@ const authLimiter = rateLimit({
   message: { error: 'Too many authentication attempts, please try again after 15 minutes.' },
 });
 
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isTestEnv ? 0 : 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many image upload attempts. Please try again later.' },
+});
+
 const holdLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: isTestEnv ? 0 : 60,
@@ -54,6 +66,7 @@ if (!isTestEnv) {
   app.use('/api', globalLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/register', authLimiter);
+  app.use('/api/organiser/upload', uploadLimiter);
   app.use('/api/shows/:showId/hold', holdLimiter);
 }
 

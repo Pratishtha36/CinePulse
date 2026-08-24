@@ -9,6 +9,11 @@ export const createEvent = async (
     posterUrl?: string;
   }
 ) => {
+  const user = await prisma.user.findUnique({ where: { id: organiserId } });
+  if (!user) {
+    throw { statusCode: 401, message: 'User session has expired or user account not found. Please log in again.' };
+  }
+
   return await prisma.event.create({
     data: {
       title: data.title,

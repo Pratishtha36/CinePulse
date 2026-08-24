@@ -40,6 +40,9 @@ export const EventCard: React.FC<EventCardProps> = ({ event, onSelectShow }) => 
         <img
           src={posterImage}
           alt={event.title}
+          onError={(e) => {
+            (e.target as HTMLImageElement).src = fallbackPoster;
+          }}
           className="h-full w-full object-cover object-center grayscale group-hover:grayscale-0 transition-all duration-200"
           loading="lazy"
         />
